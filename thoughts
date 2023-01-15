@@ -1,0 +1,199 @@
+#!/bin/sh
+set -euf
+
+if [ -z ${1+x} ]; then
+  cmd='default'
+else
+  cmd="$1"
+fi
+
+stuffDir=$HOME/.local/share/thoughts
+binDir=$HOME/.local/bin
+
+# "update" command
+update () {
+    cd "$stuffDir" && git pull
+    git clone https://github.com/thwidge/thoughts.git "$stuffDir"/thoughts-temp
+    cd "$stuffDir"/thoughts-temp
+    cp "$stuffDir"/thoughts-temp/update.sh "$stuffDir"/bin/update.sh
+    chmod +x "$stuffDir"/bin/update.sh
+    
+    # run update.sh from the new release
+    sh "$stuffDir"/bin/update.sh
+    exit 0
+}
+
+# "edit" command
+edit () {
+    cd "$stuffDir"
+    git pull
+    "${EDITOR:-vi}" .rawthoughts.html
+    cat .head.html .rawthoughts.html .foot.html > thoughts.html
+    cp thoughts.html index.html
+    git add .
+    git commit -m "update thoughts"
+    git push
+    echo
+    echo "your thoughts have been updated"
+}
+
+# "help" command
+help () {    
+    echo '$ thoughts'
+    echo '  * Share your thoughts'
+    echo
+    echo '$ thoughts update'
+    echo '  * Download and install the latest tagged release'
+    echo
+    echo '$ thoughts edit'
+    echo '  * Edit your previously posted thoughts'
+    echo
+    echo '$ thoughts style'
+    echo '  * Customize the CSS'
+    echo
+    echo '$ thoughts preview'
+    echo '  * Preview a thought in a browser while working on it'
+    echo
+    echo "If you need to do some manual intervention,"
+    echo "thoughts data lives in $HOME/.local/share/thoughts"
+    echo "and the program is installed in $HOME/.local/bin"
+}
+
+# "style" command
+# TODO clarify how CSS does/doesn't get written/overwritten between remote and local
+style () {
+    cd "$stuffDir"
+    git pull
+    "${EDITOR:-vi}" .head.html
+    cat .head.html .rawthoughts.html .foot.html > thoughts.html
+    cp thoughts.html index.html
+    git add .
+    git commit -m "update css"
+    git push
+    echo
+    echo "Done! CSS updated."
+}
+
+
+default () {
+    cd "$stuffDir"
+    # get an editor so we can type our thought.
+    # generate a random temp filename to avoid collisions.
+    # who knows what's in there!
+    rand=$(date | cksum | tr -d ' ')
+    
+    "${EDITOR:-vi}" "$rand".txt
+    if [ ! -f "$rand".txt ]; then
+        echo
+        echo "you don't always have to share your thoughts"
+        exit 0
+    fi
+    # If this thought doesn't have a trailing newline, add one
+    tail -c 1 "$rand".txt | read -r _ || echo >> "$rand".txt
+    
+    # replace some newlines with <br>
+    # and convert codeblock tag into real one
+    # and linkify things outside of codeblocks
+    awk -f "$stuffDir"/bin/parse.awk "$rand".txt > temp.txt && mv temp.txt "$rand".txt
+    # get the last 4 characters from the file
+    # if they are "<br>", delete them.
+    br=$(tail -c 5 "$rand".txt)
+    if [ "$br" = '<br>' ]; then
+        sed '$ s/.\{4\}$//' "$rand".txt > temp.txt && mv temp.txt "$rand".txt
+    fi
+    thought=$(cat "$rand".txt)
+    
+    now=$(date +"%I:%M %p | %Y-%m-%d")
+    dateHash=$(date | cksum | tr -d ' ')
+    blob="<section class=\"thought\"><div class=\"thought-date\"><a class=\"thought-date\" id=\"$dateHash\" href=\"#$dateHash\">\n$now</a></div><div class=\"thought\">\n$thought\n</div></section>\n"
+    
+    git pull
+    echo "$blob" | cat - .rawthoughts.html > "$dateHash".html && mv "$dateHash".html .rawthoughts.html
+    cat .head.html .rawthoughts.html .foot.html > thoughts.html
+    cp thoughts.html index.html
+    git add .
+    git commit -m "update thoughts"
+    git push
+    rm "$rand".txt
+    echo
+    echo "your thoughts have been shared"
+}
+
+preview () {
+    cd "$stuffDir"
+    isDone="false"
+    # get an editor so we can type our thought.
+    # generate a random temp filename to avoid collisions.
+    # who knows what's in there!
+    rand=$(date | cksum | tr -d ' ')
+    
+    # type the thought
+    while [ "$isDone" = "false" ]
+    do
+    "${EDITOR:-vi}" "$rand".txt
+    if [ ! -f "$rand".txt ]; then
+        echo
+        echo "you don't always have to share your thoughts"
+        exit 0
+    fi
+    cp "$rand.txt" thought.txt
+    
+    # turn the thought into HTML
+    tail -c 1 thought.txt | read -r _ || echo >> thought.txt
+    awk -f "$stuffDir"/bin/parse.awk thought.txt > temp.txt && mv temp.txt thought.txt
+    br=$(tail -c 5 thought.txt)
+    if [ "$br" = '<br>' ]; then
+        sed '$ s/.\{4\}$//' thought.txt > temp.txt && mv temp.txt thought.txt
+    fi
+    thought=$(cat thought.txt)
+    now=$(date +"%I:%M %p | %Y-%m-%d")
+    dateHash=$(date | cksum | tr -d ' ')
+    blob="<section class=\"thought\"><div class=\"thought-date\"><a class=\"thought-date\" id=\"$dateHash\" href=\"#$dateHash\">\n$now</a></div><div class=\"thought\">\n$thought\n</div></section>\n"
+    echo "$blob" > thought.txt
+
+    # make the preview page
+    git pull # in case of CSS changes in remote
+    cat .head.html thought.txt .foot.html > preview.html
+    echo
+    echo "Open file:///$HOME/.local/share/thoughts/preview.html in a browser,"
+    echo "or refresh the page if it's already open."
+    echo
+    printf "Do you want to post your thought in its current state? [y/n]: "
+    read -r reply
+    if [ "$reply" = "y" ]; then isDone="true"; fi
+    rm thought.txt preview.html
+    done
+    
+    # Commit it
+    git pull
+    echo "$blob" | cat - .rawthoughts.html > "$dateHash".html && mv "$dateHash".html .rawthoughts.html
+    cat .head.html .rawthoughts.html .foot.html > thoughts.html
+    cp thoughts.html index.html
+    git add .
+    git commit -m "update thoughts"
+    git push
+    rm "$rand".txt
+    echo
+    echo "your thoughts have been shared"
+}
+
+case $cmd in
+    "update")
+        update
+	;;
+    "edit")
+        edit
+	;;
+    "style")
+        style
+	;;
+    "preview")
+	preview
+        ;;
+    "default")
+	default
+	;;
+    *)
+	help
+	;;
+esac
